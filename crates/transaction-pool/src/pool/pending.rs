@@ -132,11 +132,12 @@ impl<T: TransactionOrdering> PendingPool<T> {
     /// # Panics
     ///
     /// if the transaction is already included
-    pub(crate) fn best_with_unlocked(
+    pub(crate) fn best_with_unlocked_and_attributes(
         &self,
         unlocked: Vec<Arc<ValidPoolTransaction<T::Transaction>>>,
         base_fee: u64,
-    ) -> BestTransactions<T> {
+        base_fee_per_blob_gas: u64,
+    ) -> BestTransactionsWithFees<T> {
         let mut best = self.best();
         let mut submission_id = self.submission_id;
         for tx in unlocked {
@@ -151,7 +152,7 @@ impl<T: TransactionOrdering> PendingPool<T> {
             best.all.insert(tx_id, transaction);
         }
 
-        best
+        BestTransactionsWithFees { best, base_fee, base_fee_per_blob_gas }
     }
 
     /// Returns an iterator over all transactions in the pool
@@ -348,7 +349,7 @@ impl<T: TransactionOrdering> PendingPool<T> {
         Some(tx.transaction)
     }
 
-    fn next_id(&mut self) -> u64 {
+    const fn next_id(&mut self) -> u64 {
         let id = self.submission_id;
         self.submission_id = self.submission_id.wrapping_add(1);
         id
@@ -1019,5 +1020,13 @@ mod tests {
 
         let pool_limit = SubPoolLimit { max_txs: 10, max_size: usize::MAX };
         pool.truncate_pool(pool_limit);
+
+        let sender_a = f.ids.sender_id(&a).unwrap();
+        let sender_b = f.ids.sender_id(&b).unwrap();
+        let sender_c = f.ids.sender_id(&c).unwrap();
+
+        assert_eq!(pool.get_txs_by_sender(sender_a).len(), 10);
+        assert!(pool.get_txs_by_sender(sender_b).is_empty());
+        assert!(pool.get_txs_by_sender(sender_c).is_empty());
     }
 }

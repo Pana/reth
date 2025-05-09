@@ -5,21 +5,26 @@ use alloy_evm::{
         BlockExecutionError, BlockExecutionResult, BlockExecutor, BlockExecutorFactory,
         BlockExecutorFor, ExecutableTx, OnStateHook,
     },
+    precompiles::PrecompilesMap,
     Database, Evm, EvmEnv,
 };
 use alloy_op_evm::{OpBlockExecutionCtx, OpBlockExecutor, OpEvm};
 use op_revm::{OpSpecId, OpTransaction};
-use reth_evm::{
-    execute::{BlockAssembler, BlockAssemblerInput},
-    InspectorFor,
+use reth_ethereum::{
+    evm::primitives::{
+        execute::{BlockAssembler, BlockAssemblerInput},
+        InspectorFor,
+    },
+    node::api::ConfigureEvm,
+    primitives::{Receipt, SealedBlock, SealedHeader},
 };
-use reth_node_api::ConfigureEvm;
-use reth_optimism_chainspec::OpChainSpec;
-use reth_optimism_node::{
-    OpBlockAssembler, OpEvmConfig, OpEvmFactory, OpNextBlockEnvAttributes, OpRethReceiptBuilder,
+use reth_op::{
+    chainspec::OpChainSpec,
+    node::{
+        OpBlockAssembler, OpEvmConfig, OpEvmFactory, OpNextBlockEnvAttributes, OpRethReceiptBuilder,
+    },
+    DepositReceipt, OpPrimitives, OpReceipt, OpTransactionSigned,
 };
-use reth_optimism_primitives::{DepositReceipt, OpPrimitives, OpReceipt, OpTransactionSigned};
-use reth_primitives_traits::{Receipt, SealedBlock, SealedHeader};
 use revm::{
     context::{result::ExecutionResult, TxEnv},
     database::State,
@@ -61,6 +66,10 @@ where
 
     fn evm_mut(&mut self) -> &mut Self::Evm {
         self.inner.evm_mut()
+    }
+
+    fn evm(&self) -> &Self::Evm {
+        self.inner.evm()
     }
 }
 
@@ -108,7 +117,7 @@ impl BlockExecutorFactory for CustomEvmConfig {
 
     fn create_executor<'a, DB, I>(
         &'a self,
-        evm: OpEvm<&'a mut State<DB>, I>,
+        evm: OpEvm<&'a mut State<DB>, I, PrecompilesMap>,
         ctx: OpBlockExecutionCtx,
     ) -> impl BlockExecutorFor<'a, Self, DB, I>
     where
