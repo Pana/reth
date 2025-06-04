@@ -3369,6 +3369,7 @@ dependencies = [
  "op-revm",
  "reth-chain-state",
  "reth-codecs",
+ "reth-db-api",
  "reth-ethereum",
  "reth-network-peers",
  "reth-node-builder",
@@ -3426,6 +3427,30 @@ dependencies = [
  "alloy-primitives",
  "eyre",
  "reth-ethereum",
+]
+
+[[package]]
+name = "example-engine-api-access"
+version = "0.0.0"
+dependencies = [
+ "alloy-rpc-types-engine",
+ "async-trait",
+ "clap",
+ "eyre",
+ "futures",
+ "jsonrpsee",
+ "reth-db",
+ "reth-node-api",
+ "reth-node-builder",
+ "reth-optimism-chainspec",
+ "reth-optimism-consensus",
+ "reth-optimism-node",
+ "reth-provider",
+ "reth-rpc-api",
+ "reth-tasks",
+ "reth-tracing",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -5919,9 +5944,9 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-flz"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ef71f23a8caf6f2a2d5cafbdc44956d44e6014dcb9aa58abf7e4e6481c6ec34"
+checksum = "a79f352fc3893dcd670172e615afef993a41798a1d3fc0db88a3e60ef2e70ecc"
 
 [[package]]
 name = "op-alloy-network"
