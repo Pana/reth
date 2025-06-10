@@ -295,11 +295,7 @@ impl<N: ProviderNodeTypes> BlockReader for BlockchainProvider<N> {
         self.consistent_provider()?.block(id)
     }
 
-    fn pending_block(&self) -> ProviderResult<Option<SealedBlock<Self::Block>>> {
-        Ok(self.canonical_in_memory_state.pending_block())
-    }
-
-    fn pending_block_with_senders(&self) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
+    fn pending_block(&self) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
         Ok(self.canonical_in_memory_state.pending_recovered_block())
     }
 
@@ -765,7 +761,8 @@ mod tests {
     use rand::Rng;
     use reth_chain_state::{
         test_utils::TestBlockBuilder, CanonStateNotification, CanonStateSubscriptions,
-        CanonicalInMemoryState, ExecutedBlock, ExecutedBlockWithTrieUpdates, NewCanonicalChain,
+        CanonicalInMemoryState, ExecutedBlock, ExecutedBlockWithTrieUpdates, ExecutedTrieUpdates,
+        NewCanonicalChain,
     };
     use reth_chainspec::{
         ChainSpec, ChainSpecBuilder, ChainSpecProvider, EthereumHardfork, MAINNET,
@@ -916,7 +913,7 @@ mod tests {
                         Arc::new(RecoveredBlock::new_sealed(block.clone(), senders)),
                         execution_outcome.into(),
                         Default::default(),
-                        Default::default(),
+                        ExecutedTrieUpdates::empty(),
                     )
                 })
                 .collect(),
@@ -1048,7 +1045,7 @@ mod tests {
                 )),
                 Default::default(),
                 Default::default(),
-                Default::default(),
+                ExecutedTrieUpdates::empty(),
             )],
         };
         provider.canonical_in_memory_state.update_chain(chain);
@@ -1086,7 +1083,7 @@ mod tests {
                 execution_output: Default::default(),
                 hashed_state: Default::default(),
             },
-            trie: Default::default(),
+            trie: ExecutedTrieUpdates::empty(),
         });
 
         // Now the last block should be found in memory
@@ -1144,7 +1141,7 @@ mod tests {
                 )),
                 Default::default(),
                 Default::default(),
-                Default::default(),
+                ExecutedTrieUpdates::empty(),
             )],
         };
         provider.canonical_in_memory_state.update_chain(chain);
@@ -1200,14 +1197,13 @@ mod tests {
                 execution_output: Default::default(),
                 hashed_state: Default::default(),
             },
-            trie: Default::default(),
+            trie: ExecutedTrieUpdates::empty(),
         });
 
         // Assertions related to the pending block
-        assert_eq!(provider.pending_block()?, Some(block.clone()));
 
         assert_eq!(
-            provider.pending_block_with_senders()?,
+            provider.pending_block()?,
             Some(RecoveredBlock::new_sealed(block.clone(), block.senders().unwrap()))
         );
 
@@ -1243,7 +1239,7 @@ mod tests {
                 )),
                 Default::default(),
                 Default::default(),
-                Default::default(),
+                ExecutedTrieUpdates::empty(),
             )],
         };
         provider.canonical_in_memory_state.update_chain(chain);
@@ -1733,7 +1729,7 @@ mod tests {
                             ..Default::default()
                         }),
                         Default::default(),
-                        Default::default(),
+                        ExecutedTrieUpdates::empty(),
                     )
                 })
                 .unwrap()],
@@ -1862,7 +1858,7 @@ mod tests {
                     execution_output: Default::default(),
                     hashed_state: Default::default(),
                 },
-                trie: Default::default(),
+                trie: ExecutedTrieUpdates::empty(),
             },
         );
 
@@ -1959,7 +1955,7 @@ mod tests {
                 execution_output: Default::default(),
                 hashed_state: Default::default(),
             },
-            trie: Default::default(),
+            trie: ExecutedTrieUpdates::empty(),
         });
 
         // Set the safe block in memory

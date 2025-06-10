@@ -40,18 +40,19 @@ use reth_optimism_payload_builder::{
     config::{OpBuilderConfig, OpDAConfig},
     OpBuiltPayload, OpPayloadBuilderAttributes, OpPayloadPrimitives,
 };
-use reth_optimism_primitives::{DepositReceipt, OpPrimitives, OpTransactionSigned};
+use reth_optimism_primitives::{DepositReceipt, OpPrimitives};
 use reth_optimism_rpc::{
     eth::{ext::OpEthExtApi, OpEthApiBuilder},
     miner::{MinerApiExtServer, OpMinerExtApi},
     witness::{DebugExecutionWitnessApiServer, OpDebugWitnessApi},
     OpEthApi, OpEthApiError, SequencerClient,
 };
+use reth_optimism_storage::OpStorage;
 use reth_optimism_txpool::{
     supervisor::{SupervisorClient, DEFAULT_SUPERVISOR_URL},
     OpPooledTx,
 };
-use reth_provider::{providers::ProviderFactoryBuilder, CanonStateSubscriptions, EthStorage};
+use reth_provider::{providers::ProviderFactoryBuilder, CanonStateSubscriptions};
 use reth_rpc_api::DebugApiServer;
 use reth_rpc_eth_api::{ext::L2EthApiExtServer, FullEthApiServer};
 use reth_rpc_eth_types::error::FromEvmError;
@@ -79,8 +80,6 @@ impl<N> OpNodeTypes for N where
     >
 {
 }
-/// Storage implementation for Optimism.
-pub type OpStorage = EthStorage<OpTransactionSigned>;
 
 /// Type configuration for a regular Optimism node.
 #[derive(Debug, Default, Clone)]
@@ -216,6 +215,7 @@ where
             .with_sequencer_headers(self.args.sequencer_headers.clone())
             .with_da_config(self.da_config.clone())
             .with_enable_tx_conditional(self.args.enable_tx_conditional)
+            .with_min_suggested_priority_fee(self.args.min_suggested_priority_fee)
             .build()
     }
 }
@@ -254,6 +254,7 @@ pub struct OpAddOns<N: FullNodeComponents, EthB: EthApiBuilder<N>, EV, EB> {
     pub sequencer_headers: Vec<String>,
     /// Enable transaction conditionals.
     enable_tx_conditional: bool,
+    min_suggested_priority_fee: u64,
 }
 
 impl<N, NetworkT> Default
@@ -302,6 +303,7 @@ where
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            min_suggested_priority_fee,
         } = self;
         OpAddOns {
             rpc_add_ons: rpc_add_ons.with_engine_api(engine_api_builder),
@@ -309,6 +311,7 @@ where
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            min_suggested_priority_fee,
         }
     }
 
@@ -320,6 +323,7 @@ where
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            min_suggested_priority_fee,
         } = self;
         OpAddOns {
             rpc_add_ons: rpc_add_ons.with_engine_validator(engine_validator_builder),
@@ -327,6 +331,7 @@ where
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            min_suggested_priority_fee,
         }
     }
 
@@ -356,7 +361,7 @@ where
     N: FullNodeComponents<
         Types: NodeTypes<
             ChainSpec: OpHardforks,
-            Primitives = OpPrimitives,
+            Primitives: OpPayloadPrimitives,
             Storage = OpStorage,
             Payload: EngineTypes<ExecutionData = OpExecutionData>,
         >,
@@ -382,6 +387,7 @@ where
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            ..
         } = self;
 
         let builder = reth_optimism_payload_builder::OpPayloadBuilder::new(
@@ -410,7 +416,10 @@ where
         );
 
         rpc_add_ons
-            .launch_add_ons_with(ctx, move |modules, auth_modules, registry| {
+            .launch_add_ons_with(ctx, move |container| {
+                let reth_node_builder::rpc::RpcModuleContainer { modules, auth_module, registry } =
+                    container;
+
                 debug!(target: "reth::cli", "Installing debug payload witness rpc endpoint");
                 modules.merge_if_module_configured(RethRpcModule::Debug, debug_ext.into_rpc())?;
 
@@ -423,13 +432,13 @@ where
                 // install the miner extension in the authenticated if configured
                 if modules.module_config().contains_any(&RethRpcModule::Miner) {
                     debug!(target: "reth::cli", "Installing miner DA rpc endpoint");
-                    auth_modules.merge_auth_methods(miner_ext.into_rpc())?;
+                    auth_module.merge_auth_methods(miner_ext.into_rpc())?;
                 }
 
                 // install the debug namespace in the authenticated if configured
                 if modules.module_config().contains_any(&RethRpcModule::Debug) {
                     debug!(target: "reth::cli", "Installing debug rpc endpoint");
-                    auth_modules.merge_auth_methods(registry.debug_api().into_rpc())?;
+                    auth_module.merge_auth_methods(registry.debug_api().into_rpc())?;
                 }
 
                 if enable_tx_conditional {
@@ -507,6 +516,8 @@ pub struct OpAddOnsBuilder<NetworkT> {
     enable_tx_conditional: bool,
     /// Marker for network types.
     _nt: PhantomData<NetworkT>,
+    /// Minimum suggested priority fee (tip)
+    min_suggested_priority_fee: u64,
 }
 
 impl<NetworkT> Default for OpAddOnsBuilder<NetworkT> {
@@ -516,6 +527,7 @@ impl<NetworkT> Default for OpAddOnsBuilder<NetworkT> {
             sequencer_headers: Vec::new(),
             da_config: None,
             enable_tx_conditional: false,
+            min_suggested_priority_fee: 1_000_000,
             _nt: PhantomData,
         }
     }
@@ -545,6 +557,12 @@ impl<NetworkT> OpAddOnsBuilder<NetworkT> {
         self.enable_tx_conditional = enable_tx_conditional;
         self
     }
+
+    /// Configure the minimum priority fee (tip)
+    pub const fn with_min_suggested_priority_fee(mut self, min: u64) -> Self {
+        self.min_suggested_priority_fee = min;
+        self
+    }
 }
 
 impl<NetworkT> OpAddOnsBuilder<NetworkT> {
@@ -556,13 +574,21 @@ impl<NetworkT> OpAddOnsBuilder<NetworkT> {
         EV: Default,
         EB: Default,
     {
-        let Self { sequencer_url, sequencer_headers, da_config, enable_tx_conditional, .. } = self;
+        let Self {
+            sequencer_url,
+            sequencer_headers,
+            da_config,
+            enable_tx_conditional,
+            min_suggested_priority_fee,
+            ..
+        } = self;
 
         OpAddOns {
             rpc_add_ons: RpcAddOns::new(
                 OpEthApiBuilder::default()
                     .with_sequencer(sequencer_url.clone())
-                    .with_sequencer_headers(sequencer_headers.clone()),
+                    .with_sequencer_headers(sequencer_headers.clone())
+                    .with_min_suggested_priority_fee(min_suggested_priority_fee),
                 EV::default(),
                 EB::default(),
             ),
@@ -570,6 +596,7 @@ impl<NetworkT> OpAddOnsBuilder<NetworkT> {
             sequencer_url,
             sequencer_headers,
             enable_tx_conditional,
+            min_suggested_priority_fee,
         }
     }
 }
