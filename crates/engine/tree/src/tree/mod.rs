@@ -10,7 +10,7 @@ use crate::{
 use alloy_consensus::BlockHeader;
 use alloy_eips::{merge::EPOCH_SLOTS, BlockNumHash, NumHash};
 use alloy_evm::block::BlockExecutor;
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use alloy_rpc_types_engine::{
     ForkchoiceState, PayloadStatus, PayloadStatusEnum, PayloadValidationError,
 };
@@ -50,6 +50,7 @@ use reth_trie_parallel::root::{ParallelStateRoot, ParallelStateRootError};
 use state::TreeState;
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fmt::Debug,
     sync::{
         mpsc::{Receiver, RecvError, RecvTimeoutError, Sender},
@@ -65,8 +66,6 @@ use tracing::*;
 
 mod block_buffer;
 mod cached_state;
-#[cfg(test)]
-mod e2e_tests;
 pub mod error;
 mod instrumented_state;
 mod invalid_block_hook;
@@ -276,9 +275,8 @@ where
     evm_config: C,
     /// Precompile cache map.
     precompile_cache_map: PrecompileCacheMap<SpecFor<C>>,
-    /// Metrics for precompile cache, saved between block executions so we don't re-allocate for
-    /// every block.
-    precompile_cache_metrics: CachedPrecompileMetrics,
+    /// Metrics for precompile cache, stored per address to avoid re-allocation.
+    precompile_cache_metrics: HashMap<Address, CachedPrecompileMetrics>,
 }
 
 impl<N, P: Debug, T: PayloadTypes + Debug, V: Debug, C> std::fmt::Debug
@@ -373,7 +371,7 @@ where
             payload_processor,
             evm_config,
             precompile_cache_map,
-            precompile_cache_metrics: Default::default(),
+            precompile_cache_metrics: HashMap::new(),
         }
     }
 
@@ -1207,18 +1205,18 @@ where
         debug!(target: "engine::tree", "received backfill sync finished event");
         self.backfill_sync_state = BackfillSyncState::Idle;
 
-        // backfill height is the block number that the backfill finished at
-        let mut backfill_height = ctrl.block_number();
-
         // Pipeline unwound, memorize the invalid block and wait for CL for next sync target.
-        if let ControlFlow::Unwind { bad_block, target } = &ctrl {
+        let backfill_height = if let ControlFlow::Unwind { bad_block, target } = &ctrl {
             warn!(target: "engine::tree", invalid_block=?bad_block, "Bad block detected in unwind");
             // update the `invalid_headers` cache with the new invalid header
             self.state.invalid_headers.insert(**bad_block);
 
             // if this was an unwind then the target is the new height
-            backfill_height = Some(*target);
-        }
+            Some(*target)
+        } else {
+            // backfill height is the block number that the backfill finished at
+            ctrl.block_number()
+        };
 
         // backfill height is the block number that the backfill finished at
         let Some(backfill_height) = backfill_height else { return Ok(()) };
@@ -1780,20 +1778,18 @@ where
     ) -> Option<B256> {
         let sync_target_state = self.state.forkchoice_state_tracker.sync_target_state();
 
-        // check if the distance exceeds the threshold for backfill sync
-        let mut exceeds_backfill_threshold =
-            self.exceeds_backfill_run_threshold(canonical_tip_num, target_block_number);
-
         // check if the downloaded block is the tracked finalized block
-        if let Some(buffered_finalized) = sync_target_state
+        let mut exceeds_backfill_threshold = if let Some(buffered_finalized) = sync_target_state
             .as_ref()
             .and_then(|state| self.state.buffer.block(&state.finalized_block_hash))
         {
             // if we have buffered the finalized block, we should check how far
             // we're off
-            exceeds_backfill_threshold =
-                self.exceeds_backfill_run_threshold(canonical_tip_num, buffered_finalized.number());
-        }
+            self.exceeds_backfill_run_threshold(canonical_tip_num, buffered_finalized.number())
+        } else {
+            // check if the distance exceeds the threshold for backfill sync
+            self.exceeds_backfill_run_threshold(canonical_tip_num, target_block_number)
+        };
 
         // If this is invoked after we downloaded a block we can check if this block is the
         // finalized block
@@ -2302,7 +2298,7 @@ where
             if use_state_root_task {
                 debug!(target: "engine::tree", block=?block_num_hash, "Using sparse trie state root algorithm");
                 match handle.state_root() {
-                    Ok(StateRootComputeOutcome { state_root, trie_updates, trie }) => {
+                    Ok(StateRootComputeOutcome { state_root, trie_updates }) => {
                         let elapsed = execution_finish.elapsed();
                         info!(target: "engine::tree", ?state_root, ?elapsed, "State root task finished");
                         // we double check the state root here for good measure
@@ -2316,9 +2312,6 @@ where
                                 "State root task returned incorrect state root"
                             );
                         }
-
-                        // hold on to the sparse trie for the next payload
-                        self.payload_processor.set_sparse_trie(trie);
                     }
                     Err(error) => {
                         debug!(target: "engine::tree", %error, "Background parallel state root computation failed");
@@ -2443,11 +2436,16 @@ where
 
         if !self.config.precompile_cache_disabled() {
             executor.evm_mut().precompiles_mut().map_precompiles(|address, precompile| {
+                let metrics = self
+                    .precompile_cache_metrics
+                    .entry(*address)
+                    .or_insert_with(|| CachedPrecompileMetrics::new_with_address(*address))
+                    .clone();
                 CachedPrecompile::wrap(
                     precompile,
                     self.precompile_cache_map.cache_for_address(*address),
                     *self.evm_config.evm_env(block.header()).spec_id(),
-                    Some(self.precompile_cache_metrics.clone()),
+                    Some(metrics),
                 )
             });
         }

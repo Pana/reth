@@ -3,6 +3,7 @@
 
 use crate::{authenticated_transport::AuthenticatedTransportConnect, bench_mode::BenchMode};
 use alloy_eips::BlockNumberOrTag;
+use alloy_primitives::address;
 use alloy_provider::{network::AnyNetwork, Provider, RootProvider};
 use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_engine::JwtSecret;
@@ -25,6 +26,8 @@ pub(crate) struct BenchContext {
     pub(crate) benchmark_mode: BenchMode,
     /// The next block to fetch.
     pub(crate) next_block: u64,
+    /// Whether the chain is an OP rollup.
+    pub(crate) is_optimism: bool,
 }
 
 impl BenchContext {
@@ -44,6 +47,12 @@ impl BenchContext {
         let client = ClientBuilder::default().http(rpc_url.parse()?);
         let block_provider = RootProvider::<AnyNetwork>::new(client);
 
+        // Check if this is an OP chain by checking code at a predeploy address.
+        let is_optimism = !block_provider
+            .get_code_at(address!("0x420000000000000000000000000000000000000F"))
+            .await?
+            .is_empty();
+
         // If neither `--from` nor `--to` are provided, we will run the benchmark continuously,
         // starting at the latest block.
         let mut benchmark_mode = BenchMode::new(bench_args.from, bench_args.to)?;
@@ -52,7 +61,7 @@ impl BenchContext {
         let auth_jwt = bench_args
             .auth_jwtsecret
             .clone()
-            .ok_or_else(|| eyre::eyre!("--jwtsecret must be provided for authenticated RPC"))?;
+            .ok_or_else(|| eyre::eyre!("--jwt-secret must be provided for authenticated RPC"))?;
 
         // fetch jwt from file
         //
@@ -94,6 +103,6 @@ impl BenchContext {
         };
 
         let next_block = first_block.header.number + 1;
-        Ok(Self { auth_provider, block_provider, benchmark_mode, next_block })
+        Ok(Self { auth_provider, block_provider, benchmark_mode, next_block, is_optimism })
     }
 }

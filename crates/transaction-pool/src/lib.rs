@@ -235,9 +235,10 @@
 //! use reth_transaction_pool::{TransactionValidationTaskExecutor, Pool};
 //! use reth_transaction_pool::blobstore::InMemoryBlobStore;
 //! use reth_transaction_pool::maintain::{maintain_transaction_pool_future};
+//! use alloy_consensus::Header;
 //!
 //!  async fn t<C, St>(client: C, stream: St)
-//!    where C: StateProviderFactory + BlockReaderIdExt + ChainSpecProvider<ChainSpec = ChainSpec> + Clone + 'static,
+//!    where C: StateProviderFactory + BlockReaderIdExt<Header = Header> + ChainSpecProvider<ChainSpec = ChainSpec> + Clone + 'static,
 //!     St: Stream<Item = CanonStateNotification> + Send + Unpin + 'static,
 //!     {
 //!     let blob_store = InMemoryBlobStore::default();
@@ -588,6 +589,13 @@ where
 
     fn queued_transactions(&self) -> Vec<Arc<ValidPoolTransaction<Self::Transaction>>> {
         self.pool.queued_transactions()
+    }
+
+    fn pending_and_queued_txn_count(&self) -> (usize, usize) {
+        let data = self.pool.get_pool_data();
+        let pending = data.pending_transactions_count();
+        let queued = data.queued_transactions_count();
+        (pending, queued)
     }
 
     fn all_transactions(&self) -> AllPoolTransactions<Self::Transaction> {

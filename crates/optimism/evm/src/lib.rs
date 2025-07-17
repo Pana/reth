@@ -101,7 +101,7 @@ impl<ChainSpec: OpHardforks, N: NodePrimitives, R> OpEvmConfig<ChainSpec, N, R> 
 
 impl<ChainSpec, N, R> ConfigureEvm for OpEvmConfig<ChainSpec, N, R>
 where
-    ChainSpec: EthChainSpec + OpHardforks,
+    ChainSpec: EthChainSpec<Header = Header> + OpHardforks,
     N: NodePrimitives<
         Receipt = R::Receipt,
         SignedTx = R::Transaction,
@@ -135,7 +135,7 @@ where
         let blob_excess_gas_and_price = spec
             .into_eth_spec()
             .is_enabled_in(SpecId::CANCUN)
-            .then_some(BlobExcessGasAndPrice { excess_blob_gas: 0, blob_gasprice: 0 });
+            .then_some(BlobExcessGasAndPrice { excess_blob_gas: 0, blob_gasprice: 1 });
 
         let block_env = BlockEnv {
             number: U256::from(header.number()),
@@ -177,7 +177,7 @@ where
         let blob_excess_gas_and_price = spec_id
             .into_eth_spec()
             .is_enabled_in(SpecId::CANCUN)
-            .then_some(BlobExcessGasAndPrice { excess_blob_gas: 0, blob_gasprice: 0 });
+            .then_some(BlobExcessGasAndPrice { excess_blob_gas: 0, blob_gasprice: 1 });
 
         let block_env = BlockEnv {
             number: U256::from(parent.number() + 1),

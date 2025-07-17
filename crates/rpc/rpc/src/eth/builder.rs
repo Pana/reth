@@ -4,6 +4,7 @@ use crate::{eth::core::EthApiInner, EthApi};
 use reth_chain_state::CanonStateSubscriptions;
 use reth_chainspec::ChainSpecProvider;
 use reth_node_api::NodePrimitives;
+use reth_rpc_convert::RpcTypes;
 use reth_rpc_eth_types::{
     fee_history::fee_history_cache_new_blocks_task, EthStateCache, EthStateCacheConfig,
     FeeHistoryCache, FeeHistoryCacheConfig, GasCap, GasPriceOracle, GasPriceOracleConfig,
@@ -13,14 +14,14 @@ use reth_rpc_server_types::constants::{
 };
 use reth_storage_api::{BlockReaderIdExt, StateProviderFactory};
 use reth_tasks::{pool::BlockingTaskPool, TaskSpawner, TokioTaskExecutor};
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 /// A helper to build the `EthApi` handler instance.
 ///
 /// This builder type contains all settings to create an [`EthApiInner`] or an [`EthApi`] instance
 /// directly.
 #[derive(Debug)]
-pub struct EthApiBuilder<Provider, Pool, Network, EvmConfig>
+pub struct EthApiBuilder<Provider, Pool, Network, EvmConfig, Rpc>
 where
     Provider: BlockReaderIdExt,
 {
@@ -28,6 +29,7 @@ where
     pool: Pool,
     network: Network,
     evm_config: EvmConfig,
+    rpc: PhantomData<Rpc>,
     gas_cap: GasCap,
     max_simulate_blocks: u64,
     eth_proof_window: u64,
@@ -41,9 +43,10 @@ where
     task_spawner: Box<dyn TaskSpawner + 'static>,
 }
 
-impl<Provider, Pool, Network, EvmConfig> EthApiBuilder<Provider, Pool, Network, EvmConfig>
+impl<Provider, Pool, Network, EvmConfig, Rpc> EthApiBuilder<Provider, Pool, Network, EvmConfig, Rpc>
 where
     Provider: BlockReaderIdExt,
+    Rpc: RpcTypes,
 {
     /// Creates a new `EthApiBuilder` instance.
     pub fn new(provider: Provider, pool: Pool, network: Network, evm_config: EvmConfig) -> Self
@@ -55,6 +58,7 @@ where
             pool,
             network,
             evm_config,
+            rpc: PhantomData,
             eth_cache: None,
             gas_oracle: None,
             gas_cap: GasCap::default(),
@@ -154,13 +158,17 @@ where
     ///
     /// This function panics if the blocking task pool cannot be built.
     /// This will panic if called outside the context of a Tokio runtime.
-    pub fn build_inner(self) -> EthApiInner<Provider, Pool, Network, EvmConfig>
+    pub fn build_inner(self) -> EthApiInner<Provider, Pool, Network, EvmConfig, Rpc>
     where
         Provider: BlockReaderIdExt
             + StateProviderFactory
             + ChainSpecProvider
             + CanonStateSubscriptions<
-                Primitives: NodePrimitives<Block = Provider::Block, Receipt = Provider::Receipt>,
+                Primitives: NodePrimitives<
+                    Block = Provider::Block,
+                    Receipt = Provider::Receipt,
+                    BlockHeader = Provider::Header,
+                >,
             > + Clone
             + Unpin
             + 'static,
@@ -169,6 +177,7 @@ where
             provider,
             pool,
             network,
+            rpc: _,
             evm_config,
             eth_state_cache_config,
             gas_oracle_config,
@@ -188,7 +197,7 @@ where
         let gas_oracle = gas_oracle.unwrap_or_else(|| {
             GasPriceOracle::new(provider.clone(), gas_oracle_config, eth_cache.clone())
         });
-        let fee_history_cache = FeeHistoryCache::new(fee_history_cache_config);
+        let fee_history_cache = FeeHistoryCache::<Provider::Header>::new(fee_history_cache_config);
         let new_canonical_blocks = provider.canonical_state_stream();
         let fhc = fee_history_cache.clone();
         let cache = eth_cache.clone();
@@ -227,12 +236,16 @@ where
     ///
     /// This function panics if the blocking task pool cannot be built.
     /// This will panic if called outside the context of a Tokio runtime.
-    pub fn build(self) -> EthApi<Provider, Pool, Network, EvmConfig>
+    pub fn build(self) -> EthApi<Provider, Pool, Network, EvmConfig, Rpc>
     where
         Provider: BlockReaderIdExt
             + StateProviderFactory
             + CanonStateSubscriptions<
-                Primitives: NodePrimitives<Block = Provider::Block, Receipt = Provider::Receipt>,
+                Primitives: NodePrimitives<
+                    Block = Provider::Block,
+                    Receipt = Provider::Receipt,
+                    BlockHeader = Provider::Header,
+                >,
             > + ChainSpecProvider
             + Clone
             + Unpin

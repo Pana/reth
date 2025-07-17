@@ -5,8 +5,7 @@ use alloy_primitives::{uint, Address, Bytes, B256};
 use alloy_rlp::{Decodable, Encodable};
 use alloy_rpc_types_debug::ExecutionWitness;
 use alloy_rpc_types_eth::{
-    state::EvmOverrides, transaction::TransactionRequest, Block as RpcBlock, BlockError, Bundle,
-    StateContext, TransactionInfo,
+    state::EvmOverrides, Block as RpcBlock, BlockError, Bundle, StateContext, TransactionInfo,
 };
 use alloy_rpc_types_trace::geth::{
     call::FlatCallFrame, BlockTraceResult, FourByteFrame, GethDebugBuiltInTracerType,
@@ -26,6 +25,7 @@ use reth_revm::{
     witness::ExecutionWitnessRecord,
 };
 use reth_rpc_api::DebugApiServer;
+use reth_rpc_convert::RpcTxReq;
 use reth_rpc_eth_api::{
     helpers::{EthTransactions, TraceExt},
     EthApiTypes, FromEthApiError, RpcNodeCore,
@@ -265,7 +265,7 @@ where
     ///  - `debug_traceCall` executes with __enabled__ basefee check, `eth_call` does not: <https://github.com/paradigmxyz/reth/issues/6240>
     pub async fn debug_trace_call(
         &self,
-        call: TransactionRequest,
+        call: RpcTxReq<Eth::NetworkTypes>,
         block_id: Option<BlockId>,
         opts: GethDebugTracingCallOptions,
     ) -> Result<GethTrace, Eth::Error> {
@@ -277,6 +277,7 @@ where
 
         let this = self.clone();
         if let Some(tracer) = tracer {
+            #[allow(unreachable_patterns)]
             return match tracer {
                 GethDebugTracerType::BuiltInTracer(tracer) => match tracer {
                     GethDebugBuiltInTracerType::FourByteTracer => {
@@ -362,7 +363,7 @@ where
                                 let db = db.0;
 
                                 let tx_info = TransactionInfo {
-                                    block_number: Some(evm_env.block_env.number.to()),
+                                    block_number: Some(evm_env.block_env.number.saturating_to()),
                                     base_fee: Some(evm_env.block_env.basefee),
                                     hash: None,
                                     block_hash: None,
@@ -444,6 +445,11 @@ where
 
                     Ok(GethTrace::JS(res))
                 }
+                _ => {
+                    // Note: this match is non-exhaustive in case we need to add support for
+                    // additional tracers
+                    Err(EthApiError::Unsupported("unsupported tracer").into())
+                }
             }
         }
 
@@ -475,7 +481,7 @@ where
     /// Each following bundle increments block number by 1 and block timestamp by 12 seconds
     pub async fn debug_trace_call_many(
         &self,
-        bundles: Vec<Bundle>,
+        bundles: Vec<Bundle<RpcTxReq<Eth::NetworkTypes>>>,
         state_context: Option<StateContext>,
         opts: Option<GethDebugTracingCallOptions>,
     ) -> Result<Vec<Vec<GethTrace>>, Eth::Error> {
@@ -727,11 +733,12 @@ where
                 .map(|c| c.tx_index.map(|i| i as u64))
                 .unwrap_or_default(),
             block_hash: transaction_context.as_ref().map(|c| c.block_hash).unwrap_or_default(),
-            block_number: Some(evm_env.block_env.number.to()),
+            block_number: Some(evm_env.block_env.number.saturating_to()),
             base_fee: Some(evm_env.block_env.basefee),
         };
 
         if let Some(tracer) = tracer {
+            #[allow(unreachable_patterns)]
             return match tracer {
                 GethDebugTracerType::BuiltInTracer(tracer) => match tracer {
                     GethDebugBuiltInTracerType::FourByteTracer => {
@@ -847,6 +854,11 @@ where
                         .map_err(Eth::Error::from_eth_err)?;
                     Ok((GethTrace::JS(result), state))
                 }
+                _ => {
+                    // Note: this match is non-exhaustive in case we need to add support for
+                    // additional tracers
+                    Err(EthApiError::Unsupported("unsupported tracer").into())
+                }
             }
         }
 
@@ -885,7 +897,7 @@ where
 }
 
 #[async_trait]
-impl<Eth, Evm> DebugApiServer for DebugApi<Eth, Evm>
+impl<Eth, Evm> DebugApiServer<RpcTxReq<Eth::NetworkTypes>> for DebugApi<Eth, Evm>
 where
     Eth: EthApiTypes + EthTransactions + TraceExt + 'static,
     Evm: ConfigureEvm<Primitives: NodePrimitives<Block = ProviderBlock<Eth::Provider>>> + 'static,
@@ -1023,7 +1035,7 @@ where
     /// Handler for `debug_traceCall`
     async fn debug_trace_call(
         &self,
-        request: TransactionRequest,
+        request: RpcTxReq<Eth::NetworkTypes>,
         block_id: Option<BlockId>,
         opts: Option<GethDebugTracingCallOptions>,
     ) -> RpcResult<GethTrace> {
@@ -1035,7 +1047,7 @@ where
 
     async fn debug_trace_call_many(
         &self,
-        bundles: Vec<Bundle>,
+        bundles: Vec<Bundle<RpcTxReq<Eth::NetworkTypes>>>,
         state_context: Option<StateContext>,
         opts: Option<GethDebugTracingCallOptions>,
     ) -> RpcResult<Vec<Vec<GethTrace>>> {

@@ -33,10 +33,8 @@ use reth_db_api::{
     models::StoredBlockBodyIndices,
 };
 use reth_errors::{ProviderError, ProviderResult};
-use reth_node_types::{BlockTy, HeaderTy, NodeTypes, PrimitivesTy, ReceiptTy, TxTy};
-use reth_primitives::{
-    Account, Bytecode, RecoveredBlock, SealedBlock, SealedHeader, TransactionMeta,
-};
+use reth_node_types::{Block, BlockTy, HeaderTy, NodeTypes, PrimitivesTy, ReceiptTy, TxTy};
+use reth_primitives::{Account, Bytecode, RecoveredBlock, SealedHeader, TransactionMeta};
 use reth_provider::{
     AccountReader, BlockHashReader, BlockIdReader, BlockNumReader, BlockReader, BytecodeReader,
     CanonChainTracker, CanonStateNotification, CanonStateNotifications, CanonStateSubscriptions,
@@ -46,6 +44,7 @@ use reth_provider::{
     TransactionVariant, TransactionsProvider,
 };
 use reth_prune_types::{PruneCheckpoint, PruneSegment};
+use reth_rpc_convert::TryFromBlockResponse;
 use reth_stages_types::{StageCheckpoint, StageId};
 use reth_storage_api::{
     BlockBodyIndicesProvider, BlockReaderIdExt, BlockSource, DBProvider, NodePrimitivesProvider,
@@ -280,15 +279,42 @@ where
     P: Provider<N> + Clone + 'static,
     N: Network,
     Node: NodeTypes,
+    BlockTy<Node>: TryFromBlockResponse<N>,
 {
     type Header = HeaderTy<Node>;
 
-    fn header(&self, _block_hash: &BlockHash) -> ProviderResult<Option<Self::Header>> {
-        Err(ProviderError::UnsupportedProvider)
+    fn header(&self, block_hash: &BlockHash) -> ProviderResult<Option<Self::Header>> {
+        let block_response = self.block_on_async(async {
+            self.provider.get_block_by_hash(*block_hash).await.map_err(ProviderError::other)
+        })?;
+
+        let Some(block_response) = block_response else {
+            // If the block was not found, return None
+            return Ok(None);
+        };
+
+        // Convert the network block response to primitive block
+        let block = <BlockTy<Node> as TryFromBlockResponse<N>>::from_block_response(block_response)
+            .map_err(ProviderError::other)?;
+
+        Ok(Some(block.into_header()))
     }
 
-    fn header_by_number(&self, _num: u64) -> ProviderResult<Option<Self::Header>> {
-        Err(ProviderError::UnsupportedProvider)
+    fn header_by_number(&self, num: u64) -> ProviderResult<Option<Self::Header>> {
+        let block_response = self.block_on_async(async {
+            self.provider.get_block_by_number(num.into()).await.map_err(ProviderError::other)
+        })?;
+
+        let Some(block_response) = block_response else {
+            // If the block was not found, return None
+            return Ok(None);
+        };
+
+        // Convert the network block response to primitive block
+        let block = <BlockTy<Node> as TryFromBlockResponse<N>>::from_block_response(block_response)
+            .map_err(ProviderError::other)?;
+
+        Ok(Some(block.into_header()))
     }
 
     fn header_td(&self, _hash: &BlockHash) -> ProviderResult<Option<U256>> {
@@ -345,6 +371,7 @@ where
     P: Provider<N> + Clone + 'static,
     N: Network,
     Node: NodeTypes,
+    BlockTy<Node>: TryFromBlockResponse<N>,
 {
     type Block = BlockTy<Node>;
 
@@ -356,8 +383,21 @@ where
         Err(ProviderError::UnsupportedProvider)
     }
 
-    fn block(&self, _id: BlockHashOrNumber) -> ProviderResult<Option<Self::Block>> {
-        Err(ProviderError::UnsupportedProvider)
+    fn block(&self, id: BlockHashOrNumber) -> ProviderResult<Option<Self::Block>> {
+        let block_response = self.block_on_async(async {
+            self.provider.get_block(id.into()).full().await.map_err(ProviderError::other)
+        })?;
+
+        let Some(block_response) = block_response else {
+            // If the block was not found, return None
+            return Ok(None);
+        };
+
+        // Convert the network block response to primitive block
+        let block = <BlockTy<Node> as TryFromBlockResponse<N>>::from_block_response(block_response)
+            .map_err(ProviderError::other)?;
+
+        Ok(Some(block))
     }
 
     fn pending_block(&self) -> ProviderResult<Option<RecoveredBlock<Self::Block>>> {
@@ -366,7 +406,7 @@ where
 
     fn pending_block_and_receipts(
         &self,
-    ) -> ProviderResult<Option<(SealedBlock<Self::Block>, Vec<Self::Receipt>)>> {
+    ) -> ProviderResult<Option<(RecoveredBlock<Self::Block>, Vec<Self::Receipt>)>> {
         Err(ProviderError::UnsupportedProvider)
     }
 
@@ -410,9 +450,13 @@ where
     P: Provider<N> + Clone + 'static,
     N: Network,
     Node: NodeTypes,
+    BlockTy<Node>: TryFromBlockResponse<N>,
 {
-    fn block_by_id(&self, _id: BlockId) -> ProviderResult<Option<Self::Block>> {
-        Err(ProviderError::UnsupportedProvider)
+    fn block_by_id(&self, id: BlockId) -> ProviderResult<Option<Self::Block>> {
+        match id {
+            BlockId::Number(number_or_tag) => self.block_by_number_or_tag(number_or_tag),
+            BlockId::Hash(hash) => self.block_by_hash(hash.block_hash),
+        }
     }
 
     fn sealed_header_by_id(
@@ -1233,7 +1277,7 @@ where
 
     fn pending_block_and_receipts(
         &self,
-    ) -> Result<Option<(SealedBlock<Self::Block>, Vec<Self::Receipt>)>, ProviderError> {
+    ) -> Result<Option<(RecoveredBlock<Self::Block>, Vec<Self::Receipt>)>, ProviderError> {
         Err(ProviderError::UnsupportedProvider)
     }
 

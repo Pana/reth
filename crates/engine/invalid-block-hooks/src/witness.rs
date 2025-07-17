@@ -230,8 +230,11 @@ where
         if let Some(healthy_node_client) = &self.healthy_node_client {
             // Compare the witness against the healthy node.
             let healthy_node_witness = futures::executor::block_on(async move {
-                DebugApiClient::debug_execution_witness(healthy_node_client, block.number().into())
-                    .await
+                DebugApiClient::<()>::debug_execution_witness(
+                    healthy_node_client,
+                    block.number().into(),
+                )
+                .await
             })?;
 
             let healthy_path = self.save_file(
@@ -281,7 +284,7 @@ where
 
             let filename = format!("{}_{}.bundle_state.diff", block.number(), block.hash());
             // Convert bundle state to sorted struct which has BTreeMap instead of HashMap to
-            // have deterministric ordering
+            // have deterministic ordering
             let bundle_state_sorted = BundleStateSorted::from_bundle_state(&bundle_state);
             let output_state_sorted = BundleStateSorted::from_bundle_state(&output.state);
 
