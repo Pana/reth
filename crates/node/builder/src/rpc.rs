@@ -11,14 +11,14 @@ use reth_chain_state::CanonStateSubscriptions;
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_node_api::{
     AddOnsContext, BlockTy, EngineTypes, EngineValidator, FullNodeComponents, FullNodeTypes,
-    NodeAddOns, NodeTypes, PayloadTypes, ReceiptTy,
+    NodeAddOns, NodeTypes, PayloadTypes, PayloadValidator, PrimitivesTy,
 };
 use reth_node_core::{
     node_config::NodeConfig,
     version::{CARGO_PKG_VERSION, CLIENT_CODE, NAME_CLIENT, VERGEN_GIT_SHA},
 };
 use reth_payload_builder::{PayloadBuilderHandle, PayloadStore};
-use reth_rpc::eth::{EthApiTypes, FullEthApiServer};
+use reth_rpc::eth::{core::EthRpcConverterFor, EthApiTypes, FullEthApiServer};
 use reth_rpc_api::{eth::helpers::AddDevSigners, IntoEngineApiRpcModule};
 use reth_rpc_builder::{
     auth::{AuthRpcModule, AuthServerHandle},
@@ -283,6 +283,8 @@ where
     }
 
     /// Returns a reference to the configured node.
+    ///
+    /// This gives access to the node's components.
     pub const fn node(&self) -> &Node {
         &self.node
     }
@@ -951,7 +953,22 @@ pub struct EthApiCtx<'a, N: FullNodeTypes> {
     /// Eth API configuration
     pub config: EthConfig,
     /// Cache for eth state
-    pub cache: EthStateCache<BlockTy<N::Types>, ReceiptTy<N::Types>>,
+    pub cache: EthStateCache<PrimitivesTy<N::Types>>,
+}
+
+impl<'a, N: FullNodeComponents<Types: NodeTypes<ChainSpec: EthereumHardforks>>> EthApiCtx<'a, N> {
+    /// Provides a [`EthApiBuilder`] with preconfigured config and components.
+    pub fn eth_api_builder(self) -> reth_rpc::EthApiBuilder<N, EthRpcConverterFor<N>> {
+        reth_rpc::EthApiBuilder::new_with_components(self.components.clone())
+            .eth_cache(self.cache)
+            .task_spawner(self.components.task_executor().clone())
+            .gas_cap(self.config.rpc_gas_cap.into())
+            .max_simulate_blocks(self.config.rpc_max_simulate_blocks)
+            .eth_proof_window(self.config.eth_proof_window)
+            .fee_history_cache_config(self.config.fee_history_cache)
+            .proof_permits(self.config.proof_permits)
+            .gas_oracle_config(self.config.gas_oracle)
+    }
 }
 
 /// A `EthApi` that knows how to build `eth` namespace API from [`FullNodeComponents`].
@@ -973,7 +990,8 @@ pub trait EthApiBuilder<N: FullNodeComponents>: Default + Send + 'static {
 /// Helper trait that provides the validator for the engine API
 pub trait EngineValidatorAddOn<Node: FullNodeComponents>: Send {
     /// The Validator type to use for the engine API.
-    type Validator: EngineValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
+    type Validator: EngineValidator<<Node::Types as NodeTypes>::Payload>
+        + PayloadValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
         + Clone;
 
     /// Creates the engine validator for an engine API based node.
@@ -1000,7 +1018,8 @@ where
 /// A type that knows how to build the engine validator.
 pub trait EngineValidatorBuilder<Node: FullNodeComponents>: Send + Sync + Clone {
     /// The consensus implementation to build.
-    type Validator: EngineValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
+    type Validator: EngineValidator<<Node::Types as NodeTypes>::Payload>
+        + PayloadValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
         + Clone;
 
     /// Creates the engine validator.
@@ -1013,7 +1032,8 @@ pub trait EngineValidatorBuilder<Node: FullNodeComponents>: Send + Sync + Clone 
 impl<Node, F, Fut, Validator> EngineValidatorBuilder<Node> for F
 where
     Node: FullNodeComponents,
-    Validator: EngineValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
+    Validator: EngineValidator<<Node::Types as NodeTypes>::Payload>
+        + PayloadValidator<<Node::Types as NodeTypes>::Payload, Block = BlockTy<Node::Types>>
         + Clone
         + Unpin
         + 'static,

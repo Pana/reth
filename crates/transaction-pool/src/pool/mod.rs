@@ -435,12 +435,13 @@ where
 
         {
             let mut listener = self.event_listener.write();
-
-            for tx in &promoted {
-                listener.pending(tx.hash(), None);
-            }
-            for tx in &discarded {
-                listener.discarded(tx.hash());
+            if !listener.is_empty() {
+                for tx in &promoted {
+                    listener.pending(tx.hash(), None);
+                }
+                for tx in &discarded {
+                    listener.discarded(tx.hash());
+                }
             }
         }
 
@@ -458,7 +459,7 @@ where
         pool: &mut RwLockWriteGuard<'_, TxPool<T>>,
         origin: TransactionOrigin,
         tx: TransactionValidationOutcome<T::Transaction>,
-    ) -> PoolResult<TxHash> {
+    ) -> PoolResult<AddedTransactionOutcome> {
         match tx {
             TransactionValidationOutcome::Valid {
                 balance,
@@ -494,6 +495,10 @@ where
 
                 let added = pool.add_transaction(tx, balance, state_nonce, bytecode_hash)?;
                 let hash = *added.hash();
+                let state = match added.subpool() {
+                    SubPool::Pending => AddedTransactionState::Pending,
+                    _ => AddedTransactionState::Queued,
+                };
 
                 // transaction was successfully inserted into the pool
                 if let Some(sidecar) = maybe_sidecar {
@@ -524,7 +529,7 @@ where
                 // Notify listeners for _all_ transactions
                 self.on_new_transaction(added.into_new_transaction_event());
 
-                Ok(hash)
+                Ok(AddedTransactionOutcome { hash, state })
             }
             TransactionValidationOutcome::Invalid(tx, err) => {
                 let mut listener = self.event_listener.write();
@@ -563,7 +568,7 @@ where
         &self,
         origin: TransactionOrigin,
         transactions: impl IntoIterator<Item = TransactionValidationOutcome<T::Transaction>>,
-    ) -> Vec<PoolResult<TxHash>> {
+    ) -> Vec<PoolResult<AddedTransactionOutcome>> {
         // Add the transactions and enforce the pool size limits in one write lock
         let (mut added, discarded) = {
             let mut pool = self.pool.write();
@@ -585,21 +590,15 @@ where
         if !discarded.is_empty() {
             // Delete any blobs associated with discarded blob transactions
             self.delete_discarded_blobs(discarded.iter());
+            self.event_listener.write().discarded_many(&discarded);
 
             let discarded_hashes =
                 discarded.into_iter().map(|tx| *tx.hash()).collect::<HashSet<_>>();
 
-            {
-                let mut listener = self.event_listener.write();
-                for hash in &discarded_hashes {
-                    listener.discarded(hash);
-                }
-            }
-
             // A newly added transaction may be immediately discarded, so we need to
             // adjust the result here
             for res in &mut added {
-                if let Ok(hash) = res {
+                if let Ok(AddedTransactionOutcome { hash, .. }) = res {
                     if discarded_hashes.contains(hash) {
                         *res = Err(PoolError::new(*hash, PoolErrorKind::DiscardedOnInsert))
                     }
@@ -688,20 +687,26 @@ where
         // broadcast specific transaction events
         let mut listener = self.event_listener.write();
 
-        for tx in &mined {
-            listener.mined(tx, block_hash);
-        }
-        for tx in &promoted {
-            listener.pending(tx.hash(), None);
-        }
-        for tx in &discarded {
-            listener.discarded(tx.hash());
+        if !listener.is_empty() {
+            for tx in &mined {
+                listener.mined(tx, block_hash);
+            }
+            for tx in &promoted {
+                listener.pending(tx.hash(), None);
+            }
+            for tx in &discarded {
+                listener.discarded(tx.hash());
+            }
         }
     }
 
     /// Fire events for the newly added transaction if there are any.
     fn notify_event_listeners(&self, tx: &AddedTransaction<T::Transaction>) {
         let mut listener = self.event_listener.write();
+        if listener.is_empty() {
+            // nothing to notify
+            return
+        }
 
         match tx {
             AddedTransaction::Pending(tx) => {
@@ -779,11 +784,7 @@ where
         }
         let removed = self.pool.write().remove_transactions(hashes);
 
-        let mut listener = self.event_listener.write();
-
-        for tx in &removed {
-            listener.discarded(tx.hash());
-        }
+        self.event_listener.write().discarded_many(&removed);
 
         removed
     }
@@ -816,11 +817,7 @@ where
         let sender_id = self.get_sender_id(sender);
         let removed = self.pool.write().remove_transactions_by_sender(sender_id);
 
-        let mut listener = self.event_listener.write();
-
-        for tx in &removed {
-            listener.discarded(tx.hash());
-        }
+        self.event_listener.write().discarded_many(&removed);
 
         removed
     }
@@ -944,7 +941,9 @@ where
         }
         let mut listener = self.event_listener.write();
 
-        txs.0.into_iter().for_each(|(hash, peers)| listener.propagated(&hash, peers))
+        if !listener.is_empty() {
+            txs.0.into_iter().for_each(|(hash, peers)| listener.propagated(&hash, peers));
+        }
     }
 
     /// Number of transactions in the entire pool
@@ -1167,7 +1166,6 @@ impl<T: PoolTransaction> AddedTransaction<T> {
     }
 
     /// Returns the subpool this transaction was added to
-    #[cfg(test)]
     pub(crate) const fn subpool(&self) -> SubPool {
         match self {
             Self::Pending(_) => SubPool::Pending,
@@ -1183,6 +1181,24 @@ impl<T: PoolTransaction> AddedTransaction<T> {
             Self::Parked { transaction, .. } => transaction.id(),
         }
     }
+}
+
+/// The state of a transaction when is was added to the pool
+#[derive(Debug)]
+pub enum AddedTransactionState {
+    /// Ready for execution
+    Pending,
+    /// Not ready for execution due to a nonce gap or insufficient balance
+    Queued, // TODO: Break it down to missing nonce, insufficient balance, etc.
+}
+
+/// The outcome of a successful transaction addition
+#[derive(Debug)]
+pub struct AddedTransactionOutcome {
+    /// The hash of the transaction
+    pub hash: TxHash,
+    /// The state of the transaction
+    pub state: AddedTransactionState,
 }
 
 /// Contains all state changes after a [`CanonicalStateUpdate`] was processed
