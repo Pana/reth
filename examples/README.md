@@ -37,6 +37,7 @@ See examples in a [dedicated repository](https://github.com/paradigmxyz/reth-exe
 | Example                  | Description                                                     |
 | ------------------------ | --------------------------------------------------------------- |
 | [DB access](./db-access) | Illustrates how to access Reth's database in a separate process |
+| [Op DB access](./op-db-access) | Illustrates how to access Op-Reth's database in a separate process |
 
 ## Network
 

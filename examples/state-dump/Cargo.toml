@@ -1,0 +1,14 @@
+[package]
+name = "example-state-dump"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reth-ethereum = { workspace = true, features = ["node"] }
+alloy-primitives.workspace = true
+serde_json.workspace = true
+csv.workspace = true
+eyre.workspace = true
+hex = "0.4.3"
